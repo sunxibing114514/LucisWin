@@ -1,0 +1,59 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  phase1:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 阶段 1: mingw 交叉编译 hello.exe (i386 PE 测试夹具)
+      - name: Install mingw-w64
+        run: brew install mingw-w64
+
+      - name: Build hello.exe (i386 PE)
+        run: bash TestExe/build_hello.sh
+
+      - name: Stage hello.exe to bundles
+        run: |
+          cp TestExe/hello.exe WineCoreTests/hello.exe
+          mkdir -p LucisWinApp/Resources
+          cp TestExe/hello.exe LucisWinApp/Resources/hello.exe
+
+      # 阶段 2: macOS 主机侧单元测试 (TDD 红绿验证)
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Run WineCoreTests (macOS)
+        run: |
+          xcodebuild test \
+            -scheme WineCoreTests \
+            -destination 'platform=macOS' \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
+
+      # 旁路: Linux 风格快速验证 (build_tests.sh, 不依赖 xcodebuild)
+      - name: Quick test (build_tests.sh)
+        run: bash WineCoreTests/build_tests.sh
+
+      # 阶段 3: iOS app 编译 (不签名, 仅验证可构建)
+      - name: Build LucisWinApp (iOS, no signing)
+        run: |
+          xcodebuild build \
+            -scheme LucisWinApp \
+            -sdk iphoneos \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LucisWinApp
+          path: build/Build/Products/Debug-iphoneos/*.app

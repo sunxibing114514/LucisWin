@@ -1,0 +1,93 @@
+name: luciswin
+options:
+  bundleIdPrefix: app.luciswin
+  deploymentTarget:
+    iOS: "15.0"
+    macOS: "12.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    GCC_C_LANGUAGE_STANDARD: c11
+
+# ============================================================
+# Target: WineCore — Wine 兼容层核心 (iOS 静态库)
+#   PE 加载器 + i386 解释器 + DLL 存根 + 代码页转换
+# ============================================================
+targets:
+  WineCore:
+    type: library.static
+    platform: iOS
+    sources:
+      - path: WineCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.luciswin.winecore
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/WineCore/include
+          - $(SRCROOT)/WineCore/dlls/user32
+        OTHER_CFLAGS: "-Wno-unused-parameter"
+
+  # ----------------------------------------------------------
+  # Target: WineCoreTests — macOS 命令行测试 (TDD 红绿循环)
+  #   直接编译 WineCore 源码 (不依赖 iOS 静态库), 链接 iconv。
+  #   与 build_tests.sh 同构, 验证 PE 加载器 + 解释器 + 端到端。
+  # ----------------------------------------------------------
+  WineCoreTests:
+    type: tool.unit-test
+    platform: macOS
+    sources:
+      - path: WineCore
+      - path: WineCoreTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.luciswin.tests
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/WineCore/include
+          - $(SRCROOT)/WineCore/dlls/user32
+        OTHER_LDFLAGS: "-liconv"
+        OTHER_CFLAGS: "-Wno-unused-parameter"
+    scheme:
+      testTargets:
+        - WineCoreTests
+      gatherCoverageData: false
+
+  # ----------------------------------------------------------
+  # Target: LucisWinApp — iOS 应用壳
+  #   Swift + ObjC, 依赖 WineCore, 内嵌 hello.exe 资源。
+  #   点击按钮运行 hello.exe, MessageBoxA 短路到 UIAlertController。
+  # ----------------------------------------------------------
+  LucisWinApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: LucisWinApp
+    dependencies:
+      - target: WineCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.luciswin.app
+        SWIFT_OBJC_BRIDGING_HEADER: LucisWinApp/LucisWinApp-Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/WineCore/include
+          - $(SRCROOT)/WineCore/dlls/user32
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""
+    resources:
+      - LucisWinApp/Resources/hello.exe
+    info:
+      path: LucisWinApp/Info.plist
+
+schemes:
+  WineCoreTests:
+    build:
+      targets:
+        WineCoreTests: all
+    test:
+      targets:
+        - WineCoreTests
+  LucisWinApp:
+    build:
+      targets:
+        LucisWinApp: all

@@ -1,0 +1,14 @@
+# Xcode / xcodegen
+build/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+
+# Build outputs
+/tmp/wine_tests
+*.o
+*.a
+
+# OS
+.DS_Store
