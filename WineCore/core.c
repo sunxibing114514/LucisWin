@@ -108,6 +108,10 @@ extern void user32_DefWindowProcW_thunk(cpu_context_t *ctx);
 extern void user32_BeginPaint_thunk(cpu_context_t *ctx);
 extern void user32_EndPaint_thunk(cpu_context_t *ctx);
 extern void user32_GetClientRect_thunk(cpu_context_t *ctx);
+/* Phase 3.3 user32 文本 API thunks (在 window.c 实现) */
+extern void user32_SetWindowTextW_thunk(cpu_context_t *ctx);
+extern void user32_GetWindowTextW_thunk(cpu_context_t *ctx);
+extern void user32_GetWindowTextLengthW_thunk(cpu_context_t *ctx);
 /* GDI thunks (gdi32, 在 dlls/gdi32/gdi.c 实现) */
 extern void gdi32_TextOutW_thunk(cpu_context_t *ctx);
 extern void gdi32_ExtTextOutW_thunk(cpu_context_t *ctx);
@@ -136,6 +140,10 @@ extern void kernel32_VirtualFree_thunk(cpu_context_t *ctx);
 extern void kernel32_VirtualQuery_thunk(cpu_context_t *ctx);
 extern void kernel32_RtlZeroMemory_thunk(cpu_context_t *ctx);
 extern void kernel32_GetTickCount_thunk(cpu_context_t *ctx);
+
+/* Phase 3.3 comctl32 thunks (在 dlls/comctl32/comctl32.c 实现) */
+extern void comctl32_InitCommonControls_thunk(cpu_context_t *ctx);
+extern void comctl32_InitCommonControlsEx_thunk(cpu_context_t *ctx);
 
 /* Phase 1 内建导出表 (thunk 函数指针) */
 static wine_export_t g_kernel32_exports[] = {
@@ -169,6 +177,10 @@ static wine_export_t g_user32_exports[] = {
     {"BeginPaint",      (void*)user32_BeginPaint_thunk},
     {"EndPaint",        (void*)user32_EndPaint_thunk},
     {"GetClientRect",   (void*)user32_GetClientRect_thunk},
+    /* Phase 3.3 文本 API */
+    {"SetWindowTextW",         (void*)user32_SetWindowTextW_thunk},
+    {"GetWindowTextW",          (void*)user32_GetWindowTextW_thunk},
+    {"GetWindowTextLengthW",    (void*)user32_GetWindowTextLengthW_thunk},
     {NULL, NULL}
 };
 static wine_export_t g_msvcrt_exports[] = {
@@ -192,6 +204,11 @@ static wine_export_t g_gdi32_exports[] = {
     {"GetDeviceCaps",      (void*)gdi32_GetDeviceCaps_thunk},
     {NULL, NULL}
 };
+static wine_export_t g_comctl32_exports[] = {
+    {"InitCommonControls",    (void*)comctl32_InitCommonControls_thunk},
+    {"InitCommonControlsEx", (void*)comctl32_InitCommonControlsEx_thunk},
+    {NULL, NULL}
+};
 
 /* wine_set_locale: 切换代码页 (Phase 1 仅记录, Phase 2 完整实现) */
 void wine_set_locale(int codepage) {
@@ -206,6 +223,7 @@ int wine_init(void) {
     wine_builtin_register("user32.dll",   g_user32_exports);
     wine_builtin_register("msvcrt.dll",    g_msvcrt_exports);
     wine_builtin_register("gdi32.dll",    g_gdi32_exports);
+    wine_builtin_register("comctl32.dll", g_comctl32_exports);
     g_initialized = 1;
     return 0;
 }

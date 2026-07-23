@@ -29,6 +29,7 @@ static wine_class_t g_classes[WINE_CLASS_MAX];
 
 /* ---- 窗口对象表 ---- */
 #define WINE_WINDOW_MAX 32
+#define WINE_WINDOW_TEXT_MAX 256
 typedef struct {
     uint32_t hwnd;          /* 1-based id */
     int      class_idx;     /* 指向 g_classes */
@@ -37,6 +38,15 @@ typedef struct {
     win32_msg_t queue[64];
     int         q_head, q_tail;
     int          used;
+    /* Phase 3.3: 窗口属性 (CreateWindowExW 参数存储) */
+    uint32_t parent_hwnd;   /* 父窗口 HWND, 0=顶层 */
+    uint32_t menu;          /* hMenu; 子窗口时为控制 ID */
+    uint32_t style;         /* dwStyle */
+    uint32_t ex_style;      /* dwExStyle */
+    int      is_edit;       /* 类名 == "Edit" 时置 1 */
+    int      is_visible;    /* WS_VISIBLE 风格位 */
+    int      x, y, w, h;    /* 窗口几何 */
+    uint16_t text[WINE_WINDOW_TEXT_MAX]; /* 窗口文本 (UTF-16, 含 \0) */
 } wine_window_t;
 static wine_window_t g_windows[WINE_WINDOW_MAX];
 
@@ -112,13 +122,59 @@ static int find_class(const uint16_t *wname) {
     return -1;
 }
 
+/* ---- 向窗口队列投递消息 (尾部追加, 队满丢弃) ---- */
+static void post_message(wine_window_t *w, uint32_t msg,
+                         uint32_t wParam, uint32_t lParam) {
+    if (!w) return;
+    int next = (w->q_tail + 1) % 64;
+    if (next == w->q_head) return;  /* 队满 */
+    win32_msg_t *m = &w->queue[w->q_tail];
+    memset(m, 0, sizeof(*m));
+    m->hwnd = w->hwnd;
+    m->message = msg;
+    m->wParam = wParam;
+    m->lParam = lParam;
+    w->q_tail = next;
+}
+
+/* ---- Phase 3.3: 预注册系统类 "Edit" ----
+ * wnd_proc=0 作哨兵: DispatchMessageW 见 0 不跳 guest, 由宿主代绘
+ * (BeginPaint 时为可见 Edit 子窗口发 PAINT_EDIT 命令)。 */
+static void register_system_classes(void) {
+    for (int i = 0; i < WINE_CLASS_MAX; i++) {
+        if (!g_classes[i].used) {
+            g_classes[i].name[0] = 'E';
+            g_classes[i].name[1] = 'd';
+            g_classes[i].name[2] = 'i';
+            g_classes[i].name[3] = 't';
+            g_classes[i].name[4] = 0;
+            g_classes[i].wnd_proc = 0;  /* 哨兵: 宿主代绘 */
+            g_classes[i].used = 1;
+            return;
+        }
+    }
+}
+
 /* ---- CreateWindowExW thunk ----
- * 参数: dwExStyle, lpClassName, lpWindowName, dwStyle, x, y, w, h,
- *       hWndParent, hMenu, hInstance, lpParam
- * 返回 HWND (1-based id) */
+ * 参数 (12 个): dwExStyle, lpClassName, lpWindowName, dwStyle, x, y, w, h,
+ *              hWndParent, hMenu, hInstance, lpParam
+ * 返回 HWND (1-based id, 0=失败)
+ * Phase 3.3: 读取全部参数存储到 window 结构, 检测 "Edit" 类,
+ *            仅顶层窗口 (非 WS_CHILD) 投递初始 WM_PAINT。 */
 uint32_t user32_CreateWindowExW_thunk(cpu_context_t *ctx) {
     uint32_t esp = ctx->gpr[CPU_REG_ESP];
-    uint32_t class_ga = cpu_mem_r32(ctx, esp + 8);
+    uint32_t ex_style  = cpu_mem_r32(ctx, esp + 4);
+    uint32_t class_ga  = cpu_mem_r32(ctx, esp + 8);
+    uint32_t name_ga   = cpu_mem_r32(ctx, esp + 12);
+    uint32_t style      = cpu_mem_r32(ctx, esp + 16);
+    int32_t  cx         = (int32_t)cpu_mem_r32(ctx, esp + 20);
+    int32_t  cy         = (int32_t)cpu_mem_r32(ctx, esp + 24);
+    int32_t  cw         = (int32_t)cpu_mem_r32(ctx, esp + 28);
+    int32_t  ch         = (int32_t)cpu_mem_r32(ctx, esp + 32);
+    uint32_t parent     = cpu_mem_r32(ctx, esp + 36);
+    uint32_t menu        = cpu_mem_r32(ctx, esp + 40);
+    /* hInstance (esp+44), lpParam (esp+48) — Phase 3.3 不用 */
+
     const uint16_t *wname = (const uint16_t *)((uint8_t *)ctx->mem_base + class_ga);
     int class_idx = find_class(wname);
     if (class_idx < 0) { ctx->gpr[CPU_REG_EAX] = 0; return 0; }
@@ -137,14 +193,31 @@ uint32_t user32_CreateWindowExW_thunk(cpu_context_t *ctx) {
     w->used = 1;
     w->quitted = 0;
     w->q_head = w->q_tail = 0;
+    /* Phase 3.3: 存储窗口属性 */
+    w->parent_hwnd = parent;
+    w->menu = menu;
+    w->style = style;
+    w->ex_style = ex_style;
+    w->x = cx; w->y = cy; w->w = cw; w->h = ch;
+    w->is_visible = (style & WS_VISIBLE) ? 1 : 0;
+    /* 检测 "Edit" 类 (类名窄字节比较) */
+    w->is_edit = (g_classes[class_idx].name[0] == 'E' &&
+                  g_classes[class_idx].name[1] == 'd' &&
+                  g_classes[class_idx].name[2] == 'i' &&
+                  g_classes[class_idx].name[3] == 't' &&
+                  g_classes[class_idx].name[4] == 0) ? 1 : 0;
+    /* 复制 lpWindowName (UTF-16) 到 w->text[] */
+    if (name_ga) {
+        const uint16_t *wn = (const uint16_t *)((uint8_t *)ctx->mem_base + name_ga);
+        int i = 0;
+        for (; i < WINE_WINDOW_TEXT_MAX - 1 && wn[i]; i++) w->text[i] = wn[i];
+        w->text[i] = 0;
+    }
 
-    /* 触发初始 WM_CREATE → 但 Phase 2.2 跳过, 直接给一个 WM_PAINT */
-    /* 投递一个 WM_PAINT 让消息循环能立刻绘制 */
-    win32_msg_t m = {0};
-    m.hwnd = w->hwnd;
-    m.message = WM_PAINT;
-    w->queue[w->q_tail] = m;
-    w->q_tail = (w->q_tail + 1) % 64;
+    /* 仅顶层窗口投递初始 WM_PAINT (子窗口由父窗口 BeginPaint 代绘) */
+    if (!(style & WS_CHILD)) {
+        post_message(w, WM_PAINT, 0, 0);
+    }
 
     ctx->gpr[CPU_REG_EAX] = w->hwnd;
     return w->hwnd;
@@ -296,7 +369,8 @@ uint32_t user32_DefWindowProcW_thunk(cpu_context_t *ctx) {
  * 参数: hwnd, lpPaint (out)
  * Phase 3.1: 分配真实 DC 对象 (gdi32.c), 写入 PAINTSTRUCT.hdc,
  * rcPaint = 客户区 (400x200), 设 g_paint_hdc 供 TextOutW/Rectangle 关联。
- * 旧实现用伪 HDC=1; 现在用 wine_gdi_alloc_dc 返回的句柄。 */
+ * Phase 3.3: 遍历可见 Edit 子窗口, 追加 PAINT_EDIT 命令到 g_paint_cmds
+ * (Edit 无 guest WndProc, 由宿主代绘)。 */
 uint32_t user32_BeginPaint_thunk(cpu_context_t *ctx) {
     uint32_t esp = ctx->gpr[CPU_REG_ESP];
     uint32_t hwnd = cpu_mem_r32(ctx, esp + 4);
@@ -317,6 +391,28 @@ uint32_t user32_BeginPaint_thunk(cpu_context_t *ctx) {
     g_paint_window = w;
     g_paint_hdc = hdc;
     g_paint_cmd_count = 0;
+
+    /* Phase 3.3: 为可见 Edit 子窗口发 PAINT_EDIT 命令 */
+    for (int i = 0; i < WINE_WINDOW_MAX; i++) {
+        wine_window_t *c = &g_windows[i];
+        if (!c->used || !c->is_edit || !c->is_visible) continue;
+        if (c->parent_hwnd != hwnd) continue;
+        if (g_paint_cmd_count >= WINE_PAINT_CMD_MAX) break;
+        wine_paint_cmd_t *cmd = &g_paint_cmds[g_paint_cmd_count++];
+        memset(cmd, 0, sizeof(*cmd));
+        cmd->used = 1;
+        cmd->kind = PAINT_EDIT;
+        cmd->x = c->x;
+        cmd->y = c->y;
+        cmd->x2 = c->x + c->w;
+        cmd->y2 = c->y + c->h;
+        cmd->color = 0x00000000;        /* 黑色文字 */
+        cmd->fill_color = 0xFFFFFFFF;   /* 白色背景 */
+        /* 复制 text[] (UTF-16, 截断到 127) */
+        int t = 0;
+        for (; t < 127 && c->text[t]; t++) cmd->text[t] = c->text[t];
+        cmd->text[t] = 0;
+    }
 
     ctx->gpr[CPU_REG_EAX] = hdc;
     return hdc;
@@ -347,6 +443,74 @@ void user32_GetClientRect_thunk(cpu_context_t *ctx) {
     ctx->gpr[CPU_REG_EAX] = 1;
 }
 
+/* ---- Phase 3.3: SetWindowTextW thunk ----
+ * 参数: hWnd, lpString (UTF-16, 可空)
+ * 返回: 成功 1, 失败 0
+ * 若 hWnd 是 Edit 且有父窗口, 向父队列投递 WM_COMMAND(EN_CHANGE)。 */
+void user32_SetWindowTextW_thunk(cpu_context_t *ctx) {
+    uint32_t esp = ctx->gpr[CPU_REG_ESP];
+    uint32_t hwnd = cpu_mem_r32(ctx, esp + 4);
+    uint32_t str_ga = cpu_mem_r32(ctx, esp + 8);
+
+    wine_window_t *w = hwnd_to_win(hwnd);
+    if (!w) { ctx->gpr[CPU_REG_EAX] = 0; return; }
+
+    /* 复制 UTF-16 文本到 w->text[] */
+    if (str_ga) {
+        const uint16_t *s = (const uint16_t *)((uint8_t *)ctx->mem_base + str_ga);
+        int i = 0;
+        for (; i < WINE_WINDOW_TEXT_MAX - 1 && s[i]; i++) w->text[i] = s[i];
+        w->text[i] = 0;
+    } else {
+        w->text[0] = 0;
+    }
+
+    /* Edit 子窗口: 投递 WM_COMMAND(EN_CHANGE) 到父窗口 */
+    if (w->is_edit && w->parent_hwnd) {
+        wine_window_t *parent = hwnd_to_win(w->parent_hwnd);
+        if (parent) {
+            uint32_t wp = (uint32_t)((w->menu & 0xFFFF) | ((uint32_t)EN_CHANGE << 16));
+            post_message(parent, WM_COMMAND, wp, w->hwnd);
+        }
+    }
+
+    ctx->gpr[CPU_REG_EAX] = 1;
+}
+
+/* ---- Phase 3.3: GetWindowTextW thunk ----
+ * 参数: hWnd, lpString (out), nMaxCount
+ * 返回: 实际复制字符数 (不含 \0) */
+void user32_GetWindowTextW_thunk(cpu_context_t *ctx) {
+    uint32_t esp = ctx->gpr[CPU_REG_ESP];
+    uint32_t hwnd = cpu_mem_r32(ctx, esp + 4);
+    uint32_t buf_ga = cpu_mem_r32(ctx, esp + 8);
+    int32_t  maxc = (int32_t)cpu_mem_r32(ctx, esp + 12);
+
+    wine_window_t *w = hwnd_to_win(hwnd);
+    if (!w || !buf_ga || maxc <= 0) { ctx->gpr[CPU_REG_EAX] = 0; return; }
+
+    uint16_t *dst = (uint16_t *)((uint8_t *)ctx->mem_base + buf_ga);
+    int i = 0;
+    for (; i < maxc - 1 && w->text[i]; i++) dst[i] = w->text[i];
+    dst[i] = 0;
+    ctx->gpr[CPU_REG_EAX] = (uint32_t)i;
+}
+
+/* ---- Phase 3.3: GetWindowTextLengthW thunk ----
+ * 参数: hWnd
+ * 返回: 文本字符数 (不含 \0) */
+void user32_GetWindowTextLengthW_thunk(cpu_context_t *ctx) {
+    uint32_t esp = ctx->gpr[CPU_REG_ESP];
+    uint32_t hwnd = cpu_mem_r32(ctx, esp + 4);
+
+    wine_window_t *w = hwnd_to_win(hwnd);
+    if (!w) { ctx->gpr[CPU_REG_EAX] = 0; return; }
+
+    int n = 0;
+    while (n < WINE_WINDOW_TEXT_MAX && w->text[n]) n++;
+    ctx->gpr[CPU_REG_EAX] = (uint32_t)n;
+}
+
 /* ---- 重置 (测试间清状态) ---- */
 void wine_window_reset(void) {
     memset(g_classes, 0, sizeof(g_classes));
@@ -357,4 +521,6 @@ void wine_window_reset(void) {
     g_quit_code = -1;
     /* Phase 3.1: 同步清空 GDI 对象表 (DC/Pen/Brush/Font) */
     wine_gdi_reset();
+    /* Phase 3.3: 预注册系统类 "Edit" */
+    register_system_classes();
 }

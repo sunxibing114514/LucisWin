@@ -21,6 +21,7 @@ typedef enum {
     PAINT_TEXT = 1,        /* 文本输出 (TextOutW/ExtTextOutW) */
     PAINT_RECTANGLE,       /* 矩形 (Rectangle) */
     PAINT_LINE,            /* 直线 (LineTo) */
+    PAINT_EDIT,            /* Phase 3.3: Edit 控件自动绘制 (BeginPaint 时) */
 } paint_kind_t;
 
 /* 单条绘制命令 */

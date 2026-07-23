@@ -22,14 +22,37 @@ typedef uint32_t HBRUSH32;
 typedef uint32_t HICON32;
 typedef uint32_t HCURSOR32;
 
-/* Win32 消息常量 (仅 Phase 2.2 用到的) */
-#define WM_DESTROY 0x0002
-#define WM_PAINT   0x000F
-#define WM_QUIT    0x0012
+/* Win32 消息常量 */
+#define WM_DESTROY        0x0002
+#define WM_PAINT          0x000F
+#define WM_QUIT           0x0012
+/* Phase 3.3: Edit 控件相关消息 */
+#define WM_CREATE         0x0001
+#define WM_SETTEXT        0x000C
+#define WM_GETTEXT        0x000D
+#define WM_GETTEXTLENGTH  0x000E
+#define WM_COMMAND        0x0111
+#define WM_KEYDOWN        0x0100
+#define WM_CHAR           0x0102
 
-/* 窗口风格 (仅用到的) */
+/* 窗口风格 */
 #define WS_OVERLAPPEDWINDOW 0x00CF0000u
 #define SW_SHOW 5
+/* Phase 3.3: 子窗口与可见性 */
+#define WS_CHILD          0x40000000u
+#define WS_VISIBLE        0x10000000u
+#define WS_BORDER         0x00800000u
+#define WS_EX_CLIENTEDGE  0x00000200u
+
+/* Phase 3.3: Edit 风格 */
+#define ES_AUTOHSCROLL    0x0080u
+#define ES_MULTILINE      0x0004u
+
+/* Phase 3.3: Edit 通知码 (WM_COMMAND 的 HIWORD(wParam)) */
+#define EN_SETFOCUS       0x0100
+#define EN_KILLFOCUS      0x0200
+#define EN_CHANGE         0x0300
+#define EN_UPDATE         0x0400
 
 /* MSG 结构 (28 字节, guest 内存布局) */
 #pragma pack(push, 1)
