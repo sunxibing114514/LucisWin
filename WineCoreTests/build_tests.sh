@@ -35,9 +35,11 @@ gcc -std=c11 -Wall -Wextra -g -O0 $INC \
     -o /tmp/wine_tests -lm 2>&1 | head -40 || true
 
 if [ -f /tmp/wine_tests ]; then
-    # 设置 hello.exe 路径供测试加载 (Linux/macOS 通用)
+    # 设置 hello.exe / fib.exe 路径供测试加载 (Linux/macOS 通用)
     export LUCISWIN_HELLO_EXE="$ROOT/WineCoreTests/hello.exe"
+    export LUCISWIN_FIB_EXE="$ROOT/WineCoreTests/fib.exe"
     echo "[run] LUCISWIN_HELLO_EXE=$LUCISWIN_HELLO_EXE"
+    echo "[run] LUCISWIN_FIB_EXE=$LUCISWIN_FIB_EXE"
     echo "[run] === 测试输出 ==="
     /tmp/wine_tests
 else
