@@ -16,6 +16,7 @@
 #include "wine/cpu.h"
 #include "wine/paint_hook.h"  /* wine_window_reset */
 #include "wine/heap.h"        /* wine_heap_reset */
+#include "wine/gdi.h"         /* wine_gdi_reset */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -107,8 +108,21 @@ extern void user32_DefWindowProcW_thunk(cpu_context_t *ctx);
 extern void user32_BeginPaint_thunk(cpu_context_t *ctx);
 extern void user32_EndPaint_thunk(cpu_context_t *ctx);
 extern void user32_GetClientRect_thunk(cpu_context_t *ctx);
-/* GDI thunks (gdi32, 在 window.c 同文件实现) */
+/* GDI thunks (gdi32, 在 dlls/gdi32/gdi.c 实现) */
 extern void gdi32_TextOutW_thunk(cpu_context_t *ctx);
+extern void gdi32_ExtTextOutW_thunk(cpu_context_t *ctx);
+extern void gdi32_CreatePen_thunk(cpu_context_t *ctx);
+extern void gdi32_CreateSolidBrush_thunk(cpu_context_t *ctx);
+extern void gdi32_CreateFontIndirectW_thunk(cpu_context_t *ctx);
+extern void gdi32_SelectObject_thunk(cpu_context_t *ctx);
+extern void gdi32_DeleteObject_thunk(cpu_context_t *ctx);
+extern void gdi32_MoveToEx_thunk(cpu_context_t *ctx);
+extern void gdi32_LineTo_thunk(cpu_context_t *ctx);
+extern void gdi32_Rectangle_thunk(cpu_context_t *ctx);
+extern void gdi32_SetTextColor_thunk(cpu_context_t *ctx);
+extern void gdi32_SetBkMode_thunk(cpu_context_t *ctx);
+extern void gdi32_SetBkColor_thunk(cpu_context_t *ctx);
+extern void gdi32_GetDeviceCaps_thunk(cpu_context_t *ctx);
 
 /* Phase 2.3 kernel32 内存 thunks (在 dlls/kernel32/heap.c 实现) */
 extern void kernel32_GetProcessHeap_thunk(cpu_context_t *ctx);
@@ -162,7 +176,20 @@ static wine_export_t g_msvcrt_exports[] = {
     {NULL, NULL}
 };
 static wine_export_t g_gdi32_exports[] = {
-    {"TextOutW", (void*)gdi32_TextOutW_thunk},
+    {"TextOutW",           (void*)gdi32_TextOutW_thunk},
+    {"ExtTextOutW",        (void*)gdi32_ExtTextOutW_thunk},
+    {"CreatePen",          (void*)gdi32_CreatePen_thunk},
+    {"CreateSolidBrush",   (void*)gdi32_CreateSolidBrush_thunk},
+    {"CreateFontIndirectW",(void*)gdi32_CreateFontIndirectW_thunk},
+    {"SelectObject",       (void*)gdi32_SelectObject_thunk},
+    {"DeleteObject",       (void*)gdi32_DeleteObject_thunk},
+    {"MoveToEx",           (void*)gdi32_MoveToEx_thunk},
+    {"LineTo",             (void*)gdi32_LineTo_thunk},
+    {"Rectangle",          (void*)gdi32_Rectangle_thunk},
+    {"SetTextColor",       (void*)gdi32_SetTextColor_thunk},
+    {"SetBkMode",          (void*)gdi32_SetBkMode_thunk},
+    {"SetBkColor",         (void*)gdi32_SetBkColor_thunk},
+    {"GetDeviceCaps",      (void*)gdi32_GetDeviceCaps_thunk},
     {NULL, NULL}
 };
 

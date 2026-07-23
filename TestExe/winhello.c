@@ -1,12 +1,17 @@
-/* winhello.c — Phase 2.2 测试夹具
+/* winhello.c — Phase 2.2 / Phase 3.1 测试夹具
  *
- * 功能: 创建 Win32 窗口, 消息循环, WM_PAINT 用 TextOutW 绘制文字,
- *       WM_DESTROY 后 PostQuitMessage 退出。
+ * 功能: 创建 Win32 窗口, 消息循环, WM_PAINT 用 GDI 对象模型绘制:
+ *   - CreatePen/CreateSolidBrush + SelectObject
+ *   - Rectangle 矩形 (红边蓝填)
+ *   - MoveToEx/LineTo 直线
+ *   - SetTextColor + TextOutW 文本 (绿)
+ *   - DeleteObject 清理
  *
- * 验证 luciswin 的完整窗口路径:
+ * 验证 luciswin 的完整窗口路径 + Phase 3.1 gdi32 对象模型:
  *   RegisterClassExW → CreateWindowExW → ShowWindow → UpdateWindow →
  *   消息循环 (GetMessage/TranslateMessage/DispatchMessage) →
- *   WndProc (BeginPaint/TextOutW/EndPaint/DefWindowProcW) →
+ *   WndProc (BeginPaint/CreatePen/SelectObject/Rectangle/LineTo/TextOutW/
+ *            DeleteObject/EndPaint) →
  *   WM_DESTROY → PostQuitMessage → ExitProcess
  */
 #include <windows.h>
@@ -18,9 +23,25 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     PAINTSTRUCT ps;
     switch (msg) {
     case WM_PAINT: {
-        static const wchar_t text[] = L"luciswin Win32 window";
         BeginPaint(hwnd, &ps);
-        TextOutW(ps.hdc, 10, 10, text, 21);
+        /* Phase 3.1: 红笔 + 蓝刷 */
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(255, 0, 0));
+        HBRUSH brush = CreateSolidBrush(RGB(0, 0, 255));
+        SelectObject(ps.hdc, pen);
+        SelectObject(ps.hdc, brush);
+        Rectangle(ps.hdc, 10, 10, 100, 60);          /* 红边蓝填矩形 */
+
+        /* 绿色直线 */
+        MoveToEx(ps.hdc, 10, 70, NULL);
+        LineTo(ps.hdc, 200, 70);
+
+        /* 绿色文本 */
+        static const wchar_t text[] = L"luciswin gdi32";
+        SetTextColor(ps.hdc, RGB(0, 128, 0));
+        TextOutW(ps.hdc, 10, 80, text, 14);
+
+        DeleteObject(pen);
+        DeleteObject(brush);
         EndPaint(hwnd, &ps);
         return 0;
     }

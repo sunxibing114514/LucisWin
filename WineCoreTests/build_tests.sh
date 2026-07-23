@@ -22,6 +22,7 @@ for f in \
     WineCore/dlls/kernel32/heap.c \
     WineCore/dlls/user32/user32.c \
     WineCore/dlls/user32/window.c \
+    WineCore/dlls/gdi32/gdi.c \
     WineCore/dlls/msvcrt/msvcrt.c \
     WineCore/codepage/codepage.c \
     WineCore/core.c; do

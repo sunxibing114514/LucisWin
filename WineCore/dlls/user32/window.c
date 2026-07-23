@@ -13,6 +13,7 @@
 #include "wine/cpu.h"
 #include "wine/win32_types.h"
 #include "wine/paint_hook.h"
+#include "wine/gdi.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -40,14 +41,16 @@ typedef struct {
 static wine_window_t g_windows[WINE_WINDOW_MAX];
 
 /* ---- 当前绘制上下文 ----
- * BeginPaint 设置, TextOutW 写入, EndPaint 调钩子后清空 */
-static wine_window_t *g_paint_window = NULL;
-static uint32_t g_paint_hdc = 0;
+ * BeginPaint 设置, TextOutW 写入, EndPaint 调钩子后清空。
+ * g_paint_cmds/cmd_count/hdc 由 gdi.c (TextOutW/Rectangle/LineTo) extern 引用,
+ * 故不能 static — 改为全局链接。 */
+wine_window_t *g_paint_window = NULL;
+uint32_t g_paint_hdc = 0;
 
-/* 绘制命令 (TextOutW) 缓冲 — 直接用 wine_paint_cmd_t 与 paint_hook.h 共享类型 */
+/* 绘制命令缓冲 — 用 wine_paint_cmd_t 与 paint_hook.h 共享类型 */
 #define WINE_PAINT_CMD_MAX 16
-static wine_paint_cmd_t g_paint_cmds[WINE_PAINT_CMD_MAX];
-static int g_paint_cmd_count = 0;
+wine_paint_cmd_t g_paint_cmds[WINE_PAINT_CMD_MAX];
+int g_paint_cmd_count = 0;
 
 /* 绘制钩子 (EndPaint 时调用, 传命令数组给宿主) */
 static wine_paint_hook_t g_paint_hook = NULL;
@@ -291,17 +294,19 @@ uint32_t user32_DefWindowProcW_thunk(cpu_context_t *ctx) {
 
 /* ---- BeginPaint thunk ----
  * 参数: hwnd, lpPaint (out)
- * 设置 PAINTSTRUCT.hdc = 伪 HDC (1), rcPaint = 客户区 (10x10 400x200)
- * 设置 g_paint_window 让 TextOutW 知道当前绘制目标 */
+ * Phase 3.1: 分配真实 DC 对象 (gdi32.c), 写入 PAINTSTRUCT.hdc,
+ * rcPaint = 客户区 (400x200), 设 g_paint_hdc 供 TextOutW/Rectangle 关联。
+ * 旧实现用伪 HDC=1; 现在用 wine_gdi_alloc_dc 返回的句柄。 */
 uint32_t user32_BeginPaint_thunk(cpu_context_t *ctx) {
     uint32_t esp = ctx->gpr[CPU_REG_ESP];
     uint32_t hwnd = cpu_mem_r32(ctx, esp + 4);
     uint32_t ps_ga = cpu_mem_r32(ctx, esp + 8);
 
     wine_window_t *w = hwnd_to_win(hwnd);
+    uint32_t hdc = wine_gdi_alloc_dc();
     win32_paintstruct_t ps;
     memset(&ps, 0, sizeof(ps));
-    ps.hdc = 1; /* 伪 HDC */
+    ps.hdc = hdc;
     ps.fErase = 1;
     ps.rcPaint_left = 0; ps.rcPaint_top = 0;
     ps.rcPaint_right = 400; ps.rcPaint_bottom = 200;
@@ -310,21 +315,22 @@ uint32_t user32_BeginPaint_thunk(cpu_context_t *ctx) {
     memcpy(p, &ps, sizeof(ps));
 
     g_paint_window = w;
-    g_paint_hdc = 1;
+    g_paint_hdc = hdc;
     g_paint_cmd_count = 0;
 
-    ctx->gpr[CPU_REG_EAX] = 1; /* HDC */
-    return 1;
+    ctx->gpr[CPU_REG_EAX] = hdc;
+    return hdc;
 }
 
 /* ---- EndPaint thunk ----
  * 参数: hwnd, lpPaint
- * 调绘制钩子回放命令, 清 g_paint_window */
+ * Phase 3.1: 调绘制钩子回放命令, 释放 DC 对象, 清 g_paint_window */
 void user32_EndPaint_thunk(cpu_context_t *ctx) {
     (void)ctx;
     if (g_paint_hook && g_paint_cmd_count > 0) {
         g_paint_hook(g_paint_cmds, g_paint_cmd_count);
     }
+    if (g_paint_hdc) wine_gdi_free_dc(g_paint_hdc);
     g_paint_window = NULL;
     g_paint_hdc = 0;
     g_paint_cmd_count = 0;
@@ -341,36 +347,6 @@ void user32_GetClientRect_thunk(cpu_context_t *ctx) {
     ctx->gpr[CPU_REG_EAX] = 1;
 }
 
-/* ---- GDI: TextOutW thunk (gdi32.dll) ----
- * 参数 (stdcall): hdc, x, y, lpString, cchString
- * 栈布局 (thunk 入口): [ESP]=ret_addr, [ESP+4]=hdc, [ESP+8]=x,
- *                      [ESP+12]=y, [ESP+16]=lpString, [ESP+20]=cch
- * 记录到当前 paint 的命令缓冲 */
-uint32_t gdi32_TextOutW_thunk(cpu_context_t *ctx) {
-    uint32_t esp = ctx->gpr[CPU_REG_ESP];
-    int32_t  x = (int32_t)cpu_mem_r32(ctx, esp + 8);
-    int32_t  y = (int32_t)cpu_mem_r32(ctx, esp + 12);
-    uint32_t str_ga = cpu_mem_r32(ctx, esp + 16);
-    int32_t  cch = (int32_t)cpu_mem_r32(ctx, esp + 20);
-
-    if (!g_paint_window || g_paint_cmd_count >= WINE_PAINT_CMD_MAX) {
-        ctx->gpr[CPU_REG_EAX] = 0;
-        return 0;
-    }
-    wine_paint_cmd_t *cmd = &g_paint_cmds[g_paint_cmd_count++];
-    cmd->used = 1;
-    cmd->x = x; cmd->y = y;
-    const uint16_t *s = (const uint16_t *)((uint8_t *)ctx->mem_base + str_ga);
-    int n = cch;
-    if (n > 127) n = 127;
-    int i;
-    for (i = 0; i < n; i++) cmd->text[i] = s[i];
-    cmd->text[n] = 0;
-
-    ctx->gpr[CPU_REG_EAX] = 1; /* TRUE */
-    return 1;
-}
-
 /* ---- 重置 (测试间清状态) ---- */
 void wine_window_reset(void) {
     memset(g_classes, 0, sizeof(g_classes));
@@ -379,4 +355,6 @@ void wine_window_reset(void) {
     g_paint_hdc = 0;
     g_paint_cmd_count = 0;
     g_quit_code = -1;
+    /* Phase 3.1: 同步清空 GDI 对象表 (DC/Pen/Brush/Font) */
+    wine_gdi_reset();
 }
