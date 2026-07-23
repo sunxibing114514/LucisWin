@@ -16,6 +16,7 @@ SOURCES=""
 for f in \
     WineCore/loader/pe_loader.c \
     WineCore/translator/interpreter.c \
+    WineCore/translator/block_cache.c \
     WineCore/dlls/ntdll/ntdll.c \
     WineCore/dlls/kernel32/kernel32.c \
     WineCore/dlls/kernel32/heap.c \
