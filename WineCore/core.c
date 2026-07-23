@@ -94,6 +94,8 @@ extern void user32_MessageBoxA_thunk(cpu_context_t *ctx);
 extern void kernel32_ExitProcess_thunk(cpu_context_t *ctx);
 /* msvcrt_atexit_thunk: 空实现 (Phase 1 不支持 atexit 回调) */
 extern void msvcrt_atexit_thunk(cpu_context_t *ctx);
+/* msvcrt_memset_thunk: Phase 3.4 notepad.exe memset 内建 */
+extern void msvcrt_memset_thunk(cpu_context_t *ctx);
 
 /* Phase 2.2 窗口 API thunks (user32, 在 window.c 实现) */
 extern void user32_RegisterClassExW_thunk(cpu_context_t *ctx);
@@ -185,6 +187,7 @@ static wine_export_t g_user32_exports[] = {
 };
 static wine_export_t g_msvcrt_exports[] = {
     {"atexit", (void*)msvcrt_atexit_thunk},
+    {"memset", (void*)msvcrt_memset_thunk},
     {NULL, NULL}
 };
 static wine_export_t g_gdi32_exports[] = {

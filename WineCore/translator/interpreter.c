@@ -229,6 +229,17 @@ static void flags_sub8(cpu_context_t *c, uint8_t a, uint8_t b, uint8_t r) {
     set_flag(c, CPU_FLAG_OF, (sa != sb) && (sa != sr));
 }
 
+/* 16 位减法标志 (Phase 3.4: 0x66 前缀 cmp ax, imm16 用) */
+static void flags_sub16(cpu_context_t *c, uint16_t a, uint16_t b, uint16_t r) {
+    if (r == 0) c->eflags |=  (1u << CPU_FLAG_ZF);
+    else        c->eflags &= ~(1u << CPU_FLAG_ZF);
+    if (r & 0x8000) c->eflags |=  (1u << CPU_FLAG_SF);
+    else            c->eflags &= ~(1u << CPU_FLAG_SF);
+    set_flag(c, CPU_FLAG_CF, a < b);
+    int sa = (int16_t)a < 0, sb = (int16_t)b < 0, sr = (int16_t)r < 0;
+    set_flag(c, CPU_FLAG_OF, (sa != sb) && (sa != sr));
+}
+
 /* ---- Jcc 条件判定 ----
  * 返回 1 = 跳转, 0 = 不跳。条件码 0-15 与 SETcc/Jcc 编码一致。 */
 static int jcc_cond(cpu_context_t *c, uint8_t cc) {
@@ -513,6 +524,27 @@ cpu_status_t cpu_run(cpu_context_t *ctx, uint32_t start_eip) {
             break;
         }
 
+        /* 0x66 操作数尺寸前缀: 切换到 16 位操作数
+         * Phase 3.4: notepad.exe 的 WM_COMMAND 处理用 "cmp ax, imm16"
+         * (LOWORD(wp) == IDC_EDIT) 与 "xchg ax,ax" (2 字节 NOP)。
+         * 仅实现 notepad.exe 实际用到的两个变体。 */
+        case 0x66: {
+            uint8_t op2 = *gp(ctx, ctx->eip++);
+            switch (op2) {
+            case 0x3D: { /* cmp ax, imm16 */
+                uint16_t a = (uint16_t)ctx->gpr[CPU_REG_EAX];
+                uint16_t b = read_u16(gp(ctx, ctx->eip)); ctx->eip += 2;
+                flags_sub16(ctx, a, b, (uint16_t)(a - b));
+                break;
+            }
+            case 0x90: /* xchg ax, ax = 2 字节 NOP */
+                break;
+            default:
+                cpu_raise_ud(ctx);
+            }
+            break;
+        }
+
         /* ---- F7 组: /2 NOT, /3 NEG, /4 MUL, /5 IMUL, /6 DIV, /7 IDIV ---- */
         case 0xF7: {
             modrm_t m = decode_modrm(ctx, &ctx->eip);
@@ -686,9 +718,11 @@ cpu_status_t cpu_run(cpu_context_t *ctx, uint32_t start_eip) {
             break;
         }
 
-        /* FF 组: /2 call r/m32, /6 push r/m32
+        /* FF 组: /2 call r/m32, /4 jmp r/m32, /6 push r/m32
          *   call r/m32: 若目标 >= WINE_FUNC_ID_BASE 则为 IAT 函数 id, 直接分发 thunk;
-         *               否则按普通 call 处理 (压返回地址, 跳转) */
+         *               否则按普通 call 处理 (压返回地址, 跳转)
+         *   jmp  r/m32: 同上但不压返回地址 (call stub; stub: jmp *IAT 模式,
+         *               返回地址已由前一条 call stub 压入) */
         case 0xFF: {
             modrm_t m = decode_modrm(ctx, &ctx->eip);
             switch (m.reg) {
@@ -709,6 +743,24 @@ cpu_status_t cpu_run(cpu_context_t *ctx, uint32_t start_eip) {
                     }
                 } else {
                     push32(ctx, ctx->eip);
+                    ctx->eip = target;
+                }
+                break;
+            }
+            case 4: { /* jmp r/m32 — call stub; stub: jmp *IAT 模式 */
+                uint32_t target = rm_r(ctx, &m);
+                if (target >= WINE_FUNC_ID_BASE) {
+                    /* IAT 跳转 (stub jmp *iat): 不压返回地址 (call stub 已压),
+                     * 行为与 call r/m32 的 IAT 分支一致, 只是少 push32(eip) */
+                    wine_thunk_t thunk = (wine_thunk_t)wine_func_get(target);
+                    if (!thunk) cpu_raise_ud(ctx);
+                    thunk(ctx);
+                    if (ctx->thunk_skip_ret) {
+                        ctx->thunk_skip_ret = 0;
+                    } else {
+                        ctx->eip = pop32(ctx); /* 模拟 stub 的 jmp 后 ret */
+                    }
+                } else {
                     ctx->eip = target;
                 }
                 break;
