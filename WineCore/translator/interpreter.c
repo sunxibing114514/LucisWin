@@ -48,6 +48,9 @@
 #include <string.h>
 
 /* ---- 对齐安全的多字节读取 ---- */
+static uint16_t read_u16(const uint8_t *p) {
+    uint16_t v; memcpy(&v, p, 2); return v;
+}
 static uint32_t read_u32(const uint8_t *p) {
     uint32_t v; memcpy(&v, p, 4); return v;
 }
@@ -381,6 +384,23 @@ cpu_status_t cpu_run(cpu_context_t *ctx, uint32_t start_eip) {
             break;
         }
 
+        /* group 1: 81 /r r/m32, imm32 — 与 83 同语义, 但 imm32 (非 sign-extended) */
+        case 0x81: {
+            modrm_t m = decode_modrm(ctx, &ctx->eip);
+            uint32_t imm = read_u32(gp(ctx, ctx->eip)); ctx->eip += 4;
+            uint32_t a = rm_r(ctx, &m), b = imm, r;
+            switch (m.reg) {
+            case 0: r=a+b; flags_add(ctx,a,b,r); rm_w(ctx,&m,r); break; /* add */
+            case 1: r=a|b; flags_logic(ctx,r); rm_w(ctx,&m,r); break;  /* or  */
+            case 4: r=a&b; flags_logic(ctx,r); rm_w(ctx,&m,r); break;  /* and */
+            case 5: r=a-b; flags_sub(ctx,a,b,r); rm_w(ctx,&m,r); break;/* sub */
+            case 6: r=a^b; flags_logic(ctx,r); rm_w(ctx,&m,r); break;  /* xor */
+            case 7: r=a-b; flags_sub(ctx,a,b,r); break;               /* cmp */
+            default: cpu_raise_ud(ctx);
+            }
+            break;
+        }
+
         /* group 1: 83 /r r/m32, imm8 (sign-extended) */
         case 0x83: {
             modrm_t m = decode_modrm(ctx, &ctx->eip);
@@ -647,7 +667,13 @@ cpu_status_t cpu_run(cpu_context_t *ctx, uint32_t start_eip) {
                     if (!thunk) cpu_raise_ud(ctx);
                     push32(ctx, ctx->eip);
                     thunk(ctx);
-                    ctx->eip = pop32(ctx); /* 模拟 ret */
+                    /* thunk_skip_ret: thunk 调了 guest (如 DispatchMessageW 调 WndProc),
+                     * 已自己模拟了 call+ret 栈布局, 不再 pop32 */
+                    if (ctx->thunk_skip_ret) {
+                        ctx->thunk_skip_ret = 0;
+                    } else {
+                        ctx->eip = pop32(ctx); /* 模拟 ret */
+                    }
                 } else {
                     push32(ctx, ctx->eip);
                     ctx->eip = target;
@@ -692,6 +718,12 @@ cpu_status_t cpu_run(cpu_context_t *ctx, uint32_t start_eip) {
         }
         case 0xC3: { /* ret */
             ctx->eip = pop32(ctx);
+            break;
+        }
+        case 0xC2: { /* ret imm16 — stdcall: pop eip + esp += imm16 */
+            uint16_t imm = read_u16(gp(ctx, ctx->eip)); ctx->eip += 2;
+            ctx->eip = pop32(ctx);
+            ctx->gpr[CPU_REG_ESP] += imm;
             break;
         }
         case 0xC9: { /* leave = mov esp,ebp; pop ebp */

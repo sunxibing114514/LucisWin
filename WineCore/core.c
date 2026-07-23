@@ -14,6 +14,7 @@
 #include "wine/wine.h"
 #include "wine/pe_loader.h"
 #include "wine/cpu.h"
+#include "wine/paint_hook.h"  /* wine_window_reset */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -83,8 +84,7 @@ void *wine_builtin_lookup(const char *dll, const char *name) {
     return NULL;
 }
 
-/* ============================================================
- * Phase 1 内建 DLL thunk 声明 (在各 .c 文件实现)
+/* Phase 1 内建 DLL thunk 声明 (在各 .c 文件实现)
  * ============================================================ */
 /* user32_MessageBoxA_thunk: 读栈参数, 转码, 调用钩子 */
 extern void user32_MessageBoxA_thunk(cpu_context_t *ctx);
@@ -93,17 +93,50 @@ extern void kernel32_ExitProcess_thunk(cpu_context_t *ctx);
 /* msvcrt_atexit_thunk: 空实现 (Phase 1 不支持 atexit 回调) */
 extern void msvcrt_atexit_thunk(cpu_context_t *ctx);
 
+/* Phase 2.2 窗口 API thunks (user32, 在 window.c 实现) */
+extern void user32_RegisterClassExW_thunk(cpu_context_t *ctx);
+extern void user32_CreateWindowExW_thunk(cpu_context_t *ctx);
+extern void user32_ShowWindow_thunk(cpu_context_t *ctx);
+extern void user32_UpdateWindow_thunk(cpu_context_t *ctx);
+extern void user32_GetMessageW_thunk(cpu_context_t *ctx);
+extern void user32_TranslateMessage_thunk(cpu_context_t *ctx);
+extern void user32_DispatchMessageW_thunk(cpu_context_t *ctx);
+extern void user32_PostQuitMessage_thunk(cpu_context_t *ctx);
+extern void user32_DefWindowProcW_thunk(cpu_context_t *ctx);
+extern void user32_BeginPaint_thunk(cpu_context_t *ctx);
+extern void user32_EndPaint_thunk(cpu_context_t *ctx);
+extern void user32_GetClientRect_thunk(cpu_context_t *ctx);
+/* GDI thunks (gdi32, 在 window.c 同文件实现) */
+extern void gdi32_TextOutW_thunk(cpu_context_t *ctx);
+
 /* Phase 1 内建导出表 (thunk 函数指针) */
 static wine_export_t g_kernel32_exports[] = {
     {"ExitProcess", (void*)kernel32_ExitProcess_thunk},
     {NULL, NULL}
 };
 static wine_export_t g_user32_exports[] = {
-    {"MessageBoxA", (void*)user32_MessageBoxA_thunk},
+    {"MessageBoxA",     (void*)user32_MessageBoxA_thunk},
+    /* Phase 2.2 窗口 API */
+    {"RegisterClassExW",(void*)user32_RegisterClassExW_thunk},
+    {"CreateWindowExW", (void*)user32_CreateWindowExW_thunk},
+    {"ShowWindow",      (void*)user32_ShowWindow_thunk},
+    {"UpdateWindow",    (void*)user32_UpdateWindow_thunk},
+    {"GetMessageW",     (void*)user32_GetMessageW_thunk},
+    {"TranslateMessage",(void*)user32_TranslateMessage_thunk},
+    {"DispatchMessageW",(void*)user32_DispatchMessageW_thunk},
+    {"PostQuitMessage", (void*)user32_PostQuitMessage_thunk},
+    {"DefWindowProcW",  (void*)user32_DefWindowProcW_thunk},
+    {"BeginPaint",      (void*)user32_BeginPaint_thunk},
+    {"EndPaint",        (void*)user32_EndPaint_thunk},
+    {"GetClientRect",   (void*)user32_GetClientRect_thunk},
     {NULL, NULL}
 };
 static wine_export_t g_msvcrt_exports[] = {
     {"atexit", (void*)msvcrt_atexit_thunk},
+    {NULL, NULL}
+};
+static wine_export_t g_gdi32_exports[] = {
+    {"TextOutW", (void*)gdi32_TextOutW_thunk},
     {NULL, NULL}
 };
 
@@ -119,6 +152,7 @@ int wine_init(void) {
     wine_builtin_register("kernel32.dll", g_kernel32_exports);
     wine_builtin_register("user32.dll",   g_user32_exports);
     wine_builtin_register("msvcrt.dll",    g_msvcrt_exports);
+    wine_builtin_register("gdi32.dll",    g_gdi32_exports);
     g_initialized = 1;
     return 0;
 }
@@ -133,6 +167,9 @@ int wine_run_exe(const uint8_t *data, size_t len) {
         fprintf(stderr, "[wine] PE 加载失败: %s\n", pe_last_error_string(err));
         return -1;
     }
+
+    /* Phase 2.2: 每次运行前重置窗口管理器状态 (类注册表/窗口表/消息队列) */
+    wine_window_reset();
 
     /* 扩展镜像内存: 在 PE 镜像后附加栈空间
      *   guest 内存布局: [0, img.size) = PE 镜像, [img.size, img.size+STACK) = 栈

@@ -72,6 +72,7 @@ typedef struct cpu_context {
     uint32_t exit_code;    /* ExitProcess 写入的退出码 */
     jmp_buf  exit_jmp;     /* ExitProcess/#UD longjmp 目标 */
     cpu_status_t status;   /* cpu_run 退出时的状态 */
+    int      thunk_skip_ret; /* thunk 调 guest 时设 1, 跳过 FF /2 的 pop32 模拟 ret */
 } cpu_context_t;
 
 /* cpu_run: 从 start_eip 开始解释执行, 直到 hlt/ExitProcess/#UD
