@@ -46,6 +46,7 @@
  */
 #include "wine/cpu.h"
 #include "wine/wine.h"
+#include "block_cache.h"
 #include <string.h>
 
 /* ---- 对齐安全的多字节读取 ---- */
@@ -278,6 +279,13 @@ cpu_status_t cpu_run(cpu_context_t *ctx, uint32_t start_eip) {
         return ctx->status; /* ExitProcess / #UD longjmp 回来 */
     }
 
+    /* Phase 2.4: 每次 cpu_run 入口清空块缓存。
+     * 块缓存按 guest EIP 索引, 假设 EIP→代码映射在单次 cpu_run 内稳定。
+     * 多次 cpu_run 调用间 (不同测试 / 不同 PE) mem_base 可能被覆盖,
+     * 同一 EIP 对应不同代码, 必须失效缓存避免污染。
+     * 循环内不 reset, 不影响命中率。 */
+    block_cache_reset();
+
     for (;;) {
         if (ctx->eip >= ctx->mem_size) cpu_raise_ud(ctx);
 
@@ -292,6 +300,13 @@ cpu_status_t cpu_run(cpu_context_t *ctx, uint32_t start_eip) {
             if (!thunk) cpu_raise_ud(ctx);
             thunk(ctx);
             ctx->eip = pop32(ctx); /* 模拟 ret */
+            continue;
+        }
+
+        /* Phase 2.4 块缓存: 命中或可翻译直线块时执行后 continue,
+         * 首条就是控制流/不支持指令时返回 0 走下方 switch 慢路径。
+         * 详见 docs/superpowers/specs/2026-07-23-luciswin-phase2.4-blockcache-design.md */
+        if (block_cache_try_exec(ctx, ctx->eip)) {
             continue;
         }
 

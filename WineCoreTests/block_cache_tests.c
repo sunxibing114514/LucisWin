@@ -37,7 +37,11 @@ static cpu_context_t make_ctx(uint8_t *mem, size_t len) {
  *   6: 83 F8 05           cmp eax, 5
  *   9: 7C FA              jl  .loop  (rel8 -6 -> 0x05)
  *   B: F4                 hlt
- * 跑完 eax==5, 循环块 (inc/cmp) 应被命中 >=4 次。
+ * 跑完 eax==5, 循环块 (inc/cmp) 应被命中 >=3 次。
+ *
+ * 命中分析: inc 共执行 5 次 (eax 0->5)。首次 eip=0 块含 mov+inc+cmp,
+ * 把 eax 0->1 顺便做了; 之后 eip=5 块执行剩余 4 次 inc (eax 1->2->3->4->5),
+ * 首次 eip=5 miss 翻译, 后 3 次命中 -> hits==3。
  */
 static const uint8_t k_loop_code[] = {
     0xB8, 0x00,0x00,0x00,0x00,    /* mov eax,0   @0 */
@@ -58,9 +62,9 @@ TEST(cache_loop_hits_increment) {
     ASSERT(ctx.gpr[CPU_REG_EAX] == 5,
            "eax 应为 5, 实际 %u", ctx.gpr[CPU_REG_EAX]);
     ASSERT(ctx.status == CPU_OK, "应以 hlt 正常停止, 实际 %d", ctx.status);
-    /* 循环体从 EIP=5 开始, 第一次 miss 翻译, 后续 4 次 loop 应命中 */
-    ASSERT(block_cache_hits() >= 4,
-           "命中计数应 >=4, 实际 %llu",
+    /* eip=5 块首次 miss 翻译, 后续 3 次循环命中 -> hits>=3 */
+    ASSERT(block_cache_hits() >= 3,
+           "命中计数应 >=3, 实际 %llu",
            (unsigned long long)block_cache_hits());
 }
 
@@ -231,7 +235,7 @@ TEST(cache_slot_eviction_still_correct) {
         0xB8,0x07,0x00,0x00,0x00, 0x83,0xC0,0x03, 0xF4
     };
     memcpy(mem1, c1, sizeof(c1));
-    cpu_context_t ctx1 = make_ctx(mem1, sizeof(mem1), 0);
+    cpu_context_t ctx1 = make_ctx(mem1, sizeof(mem1));
     cpu_run(&ctx1, 0);
     ASSERT(ctx1.gpr[CPU_REG_EAX] == 10, "段1 eax 应为 10, 实际 %u",
            ctx1.gpr[CPU_REG_EAX]);
@@ -243,7 +247,7 @@ TEST(cache_slot_eviction_still_correct) {
         0xB8,0x64,0x00,0x00,0x00, 0x83,0xE8,0x14, 0xF4  /* mov eax,100; sub eax,20 -> 80 */
     };
     memcpy(mem2, c2, sizeof(c2));
-    cpu_context_t ctx2 = make_ctx(mem2, sizeof(mem2), 0);
+    cpu_context_t ctx2 = make_ctx(mem2, sizeof(mem2));
     cpu_run(&ctx2, 0);
     ASSERT(ctx2.gpr[CPU_REG_EAX] == 80, "段2 eax 应为 80, 实际 %u",
            ctx2.gpr[CPU_REG_EAX]);
