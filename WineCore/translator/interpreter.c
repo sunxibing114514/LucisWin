@@ -16,6 +16,7 @@
  *   29     sub r/m32, r32    (hello.exe 用)
  *   31     xor r/m32, r32
  *   39     cmp r/m32, r32    (hello.exe 用)
+ *   3C     cmp AL, imm8      (heap.exe 用, AL 短形式)
  *   85     test r/m32, r32   (hello.exe 用)
  *   83 /0  add r/m32, imm8
  *   83 /4  and r/m32, imm8   (hello.exe 用)
@@ -214,6 +215,17 @@ static void flags_logic8(cpu_context_t *c, uint8_t r) {
     else          c->eflags &= ~(1u << CPU_FLAG_SF);
     set_flag(c, CPU_FLAG_CF, 0);
     set_flag(c, CPU_FLAG_OF, 0);
+}
+
+/* 8 位 SUB/CMP 标志: CF=无符号借位, OF=有符号溢出 (按 8 位语义) */
+static void flags_sub8(cpu_context_t *c, uint8_t a, uint8_t b, uint8_t r) {
+    if (r == 0) c->eflags |=  (1u << CPU_FLAG_ZF);
+    else        c->eflags &= ~(1u << CPU_FLAG_ZF);
+    if (r & 0x80) c->eflags |=  (1u << CPU_FLAG_SF);
+    else          c->eflags &= ~(1u << CPU_FLAG_SF);
+    set_flag(c, CPU_FLAG_CF, a < b);
+    int sa = (int8_t)a < 0, sb = (int8_t)b < 0, sr = (int8_t)r < 0;
+    set_flag(c, CPU_FLAG_OF, (sa != sb) && (sa != sr));
 }
 
 /* ---- Jcc 条件判定 ----
@@ -477,6 +489,12 @@ cpu_status_t cpu_run(cpu_context_t *ctx, uint32_t start_eip) {
         case 0x84: { /* test r/m8, r8 — 影响 ZF/SF/CF=0/OF=0 */
             modrm_t m = decode_modrm(ctx, &ctx->eip);
             flags_logic8(ctx, rm8_r(ctx, &m) & reg8_get(ctx, m.reg));
+            break;
+        }
+        case 0x3C: { /* cmp AL, imm8 — AL 短形式 (mingw 生成, heap.exe 用) */
+            uint8_t a = (uint8_t)ctx->gpr[CPU_REG_EAX];
+            uint8_t b = *gp(ctx, ctx->eip++);
+            flags_sub8(ctx, a, b, (uint8_t)(a - b));
             break;
         }
 

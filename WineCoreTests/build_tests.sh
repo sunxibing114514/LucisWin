@@ -18,6 +18,7 @@ for f in \
     WineCore/translator/interpreter.c \
     WineCore/dlls/ntdll/ntdll.c \
     WineCore/dlls/kernel32/kernel32.c \
+    WineCore/dlls/kernel32/heap.c \
     WineCore/dlls/user32/user32.c \
     WineCore/dlls/user32/window.c \
     WineCore/dlls/msvcrt/msvcrt.c \
@@ -40,9 +41,11 @@ if [ -f /tmp/wine_tests ]; then
     export LUCISWIN_HELLO_EXE="$ROOT/WineCoreTests/hello.exe"
     export LUCISWIN_FIB_EXE="$ROOT/WineCoreTests/fib.exe"
     export LUCISWIN_WINHELLO_EXE="$ROOT/WineCoreTests/winhello.exe"
+    export LUCISWIN_HEAP_EXE="$ROOT/WineCoreTests/heap.exe"
     echo "[run] LUCISWIN_HELLO_EXE=$LUCISWIN_HELLO_EXE"
     echo "[run] LUCISWIN_FIB_EXE=$LUCISWIN_FIB_EXE"
     echo "[run] LUCISWIN_WINHELLO_EXE=$LUCISWIN_WINHELLO_EXE"
+    echo "[run] LUCISWIN_HEAP_EXE=$LUCISWIN_HEAP_EXE"
     echo "[run] === 测试输出 ==="
     /tmp/wine_tests
 else

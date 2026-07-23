@@ -15,6 +15,7 @@
 #include "wine/pe_loader.h"
 #include "wine/cpu.h"
 #include "wine/paint_hook.h"  /* wine_window_reset */
+#include "wine/heap.h"        /* wine_heap_reset */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -109,9 +110,34 @@ extern void user32_GetClientRect_thunk(cpu_context_t *ctx);
 /* GDI thunks (gdi32, 在 window.c 同文件实现) */
 extern void gdi32_TextOutW_thunk(cpu_context_t *ctx);
 
+/* Phase 2.3 kernel32 内存 thunks (在 dlls/kernel32/heap.c 实现) */
+extern void kernel32_GetProcessHeap_thunk(cpu_context_t *ctx);
+extern void kernel32_HeapAlloc_thunk(cpu_context_t *ctx);
+extern void kernel32_HeapFree_thunk(cpu_context_t *ctx);
+extern void kernel32_HeapSize_thunk(cpu_context_t *ctx);
+extern void kernel32_HeapCreate_thunk(cpu_context_t *ctx);
+extern void kernel32_HeapDestroy_thunk(cpu_context_t *ctx);
+extern void kernel32_VirtualAlloc_thunk(cpu_context_t *ctx);
+extern void kernel32_VirtualFree_thunk(cpu_context_t *ctx);
+extern void kernel32_VirtualQuery_thunk(cpu_context_t *ctx);
+extern void kernel32_RtlZeroMemory_thunk(cpu_context_t *ctx);
+extern void kernel32_GetTickCount_thunk(cpu_context_t *ctx);
+
 /* Phase 1 内建导出表 (thunk 函数指针) */
 static wine_export_t g_kernel32_exports[] = {
-    {"ExitProcess", (void*)kernel32_ExitProcess_thunk},
+    {"ExitProcess",     (void*)kernel32_ExitProcess_thunk},
+    /* Phase 2.3 内存 API */
+    {"GetProcessHeap",  (void*)kernel32_GetProcessHeap_thunk},
+    {"HeapAlloc",       (void*)kernel32_HeapAlloc_thunk},
+    {"HeapFree",        (void*)kernel32_HeapFree_thunk},
+    {"HeapSize",        (void*)kernel32_HeapSize_thunk},
+    {"HeapCreate",      (void*)kernel32_HeapCreate_thunk},
+    {"HeapDestroy",     (void*)kernel32_HeapDestroy_thunk},
+    {"VirtualAlloc",    (void*)kernel32_VirtualAlloc_thunk},
+    {"VirtualFree",     (void*)kernel32_VirtualFree_thunk},
+    {"VirtualQuery",    (void*)kernel32_VirtualQuery_thunk},
+    {"RtlZeroMemory",   (void*)kernel32_RtlZeroMemory_thunk},
+    {"GetTickCount",    (void*)kernel32_GetTickCount_thunk},
     {NULL, NULL}
 };
 static wine_export_t g_user32_exports[] = {
@@ -171,28 +197,35 @@ int wine_run_exe(const uint8_t *data, size_t len) {
     /* Phase 2.2: 每次运行前重置窗口管理器状态 (类注册表/窗口表/消息队列) */
     wine_window_reset();
 
-    /* 扩展镜像内存: 在 PE 镜像后附加栈空间
-     *   guest 内存布局: [0, img.size) = PE 镜像, [img.size, img.size+STACK) = 栈
-     *   栈向下生长, ESP 初始 = img.size + STACK - 64 */
+    /* 扩展镜像内存: 在 PE 镜像后附加栈空间 + 动态分配区
+     *   guest 内存布局:
+     *     [0, img.size)                                  PE 镜像
+     *     [img.size, img.size + STACK)                   栈 (向下生长)
+     *     [img.size + STACK, img.size + STACK + HEAP)    动态分配区 (Phase 2.3)
+     *   ESP 初始 = img.size + STACK - 64
+     *   heap_base = img.size + STACK (分配器起点) */
     #define WINE_STACK_SIZE (256 * 1024)
-    uint8_t *mem = (uint8_t *)realloc(img.base, img.size + WINE_STACK_SIZE);
+    uint8_t *mem = (uint8_t *)realloc(img.base, img.size + WINE_STACK_SIZE + WINE_HEAP_MAX);
     if (!mem) {
         pe_free_image(&img);
         return -1;
     }
-    memset(mem + img.size, 0, WINE_STACK_SIZE);
+    memset(mem + img.size, 0, WINE_STACK_SIZE + WINE_HEAP_MAX);
     img.base = mem;
 
     /* 设置 CPU 上下文 */
     cpu_context_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.mem_base = mem;
-    ctx.mem_size = img.size + WINE_STACK_SIZE;
+    ctx.mem_size = img.size + WINE_STACK_SIZE + WINE_HEAP_MAX;
     ctx.current_image = &img;
     ctx.gpr[CPU_REG_ESP] = img.size + WINE_STACK_SIZE - 64;
     /* 压入伪造返回地址 0 (main 若 ret 会跳到 offset 0, 可能触发 #UD — 但 hello.exe 调 ExitProcess 不 ret) */
     ctx.gpr[CPU_REG_ESP] -= 4;
     cpu_mem_w32(&ctx, ctx.gpr[CPU_REG_ESP], 0);
+
+    /* Phase 2.3: 重置堆分配器, heap_base = 栈顶之后 */
+    wine_heap_reset(img.size + WINE_STACK_SIZE);
 
     /* 执行 */
     cpu_status_t st = cpu_run(&ctx, img.entry_point);
